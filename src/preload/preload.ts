@@ -4,8 +4,12 @@ import { AppSettings, AppState, CaptureResult, CodexUsage, SaveToastPayload } fr
 const api = {
   getState: () => ipcRenderer.invoke('app:get-state') as Promise<AppState>,
   getCodexUsage: () => ipcRenderer.invoke('codex:get-usage') as Promise<CodexUsage>,
-  addTask: (text: string) => ipcRenderer.invoke('task:add', text) as Promise<AppState>,
+  addTask: (text: string, dueDate?: string) => ipcRenderer.invoke('task:add', text, dueDate) as Promise<AppState>,
+  updateTask: (id: string, text: string, dueDate: string) => ipcRenderer.invoke('task:update', id, text, dueDate) as Promise<AppState>,
+  getStartup: () => ipcRenderer.invoke('startup:get') as Promise<boolean>,
+  setStartup: (enabled: boolean) => ipcRenderer.invoke('startup:set', enabled) as Promise<boolean>,
   toggleTask: (taskId: string, completed: boolean) => ipcRenderer.invoke('task:toggle', taskId, completed) as Promise<AppState>,
+  setPinned: (taskId: string, pinned: boolean) => ipcRenderer.invoke('task:set-pinned', taskId, pinned) as Promise<AppState>,
   deleteTask: (taskId: string) => ipcRenderer.invoke('task:delete', taskId) as Promise<AppState>,
   updateTaskText: (taskId: string, text: string) =>
     ipcRenderer.invoke('task:update-text', taskId, text) as Promise<AppState>,
@@ -20,6 +24,8 @@ const api = {
   runSync: () => ipcRenderer.invoke('sync:run') as Promise<{ ok: boolean; message: string }>,
   minimizeWindow: () => ipcRenderer.invoke('window:minimize'),
   closeWindow: () => ipcRenderer.invoke('window:close'),
+  hideCard: () => ipcRenderer.invoke('card:hide') as Promise<void>,
+  showCard: (card: 'main' | 'short') => ipcRenderer.invoke('card:show', card) as Promise<void>,
   onStateUpdated: (handler: (state: AppState) => void) => {
     const wrapped = (_event: Electron.IpcRendererEvent, state: AppState) => handler(state);
     ipcRenderer.on('state:updated', wrapped);
@@ -38,3 +44,17 @@ const api = {
 };
 
 contextBridge.exposeInMainWorld('todoApi', api);
+contextBridge.exposeInMainWorld('shortTodoApi', {
+  ...api,
+  getState: () => ipcRenderer.invoke('short:get-state') as Promise<AppState>,
+  addTask: (text: string) => ipcRenderer.invoke('short:add', text) as Promise<AppState>,
+  updateTask: (id: string, text: string) => ipcRenderer.invoke('short:update', id, text) as Promise<AppState>,
+  toggleTask: (id: string, completed: boolean) => ipcRenderer.invoke('short:toggle', id, completed) as Promise<AppState>,
+  setPinned: (id: string, pinned: boolean) => ipcRenderer.invoke('short:set-pinned', id, pinned) as Promise<AppState>,
+  deleteTask: (id: string) => ipcRenderer.invoke('short:delete', id) as Promise<AppState>,
+  onStateUpdated: (handler: (state: AppState) => void) => {
+    const wrapped = (_event: Electron.IpcRendererEvent, state: AppState) => handler(state);
+    ipcRenderer.on('short:state-updated', wrapped);
+    return () => ipcRenderer.removeListener('short:state-updated', wrapped);
+  }
+});

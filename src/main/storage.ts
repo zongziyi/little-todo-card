@@ -1,5 +1,5 @@
 import { app, safeStorage } from 'electron';
-import { copyFile, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { watch, FSWatcher } from 'node:fs';
 import path from 'node:path';
 import { AppSettings, TodoItem } from '../shared/types';
@@ -11,7 +11,7 @@ const TODO_FILE_NAME = 'todo.md';
 const ENCRYPTED_PASSWORD_PREFIX = 'safeStorage:';
 
 function getDefaultTodoPath() {
-  const baseDir = path.join(app.getPath('documents'), 'ApexTodo');
+  const baseDir = app.getPath('userData');
   return path.join(baseDir, TODO_FILE_NAME);
 }
 
@@ -19,14 +19,14 @@ function defaultSettings(): AppSettings {
   return {
     todoFilePath: getDefaultTodoPath(),
     globalShortcut: 'CommandOrControl+Shift+A',
-    alwaysOnTop: true,
-    desktopPinned: false,
-    desktopLockPosition: true,
+    alwaysOnTop: false,
+    desktopPinned: true,
+    desktopLockPosition: false,
     desktopMouseThrough: false,
     showCodexUsage: false,
-    windowOpacity: 0.96,
+    windowOpacity: 1,
     theme: 'light',
-    language: 'system',
+    language: 'zh-CN',
     windowBounds: undefined,
     webdav: {
       enabled: false,
@@ -76,6 +76,7 @@ export class StorageService {
   private settingsPath: string;
   private watcher: FSWatcher | null = null;
   private writeInProgress = false;
+  private settingsWriteQueue: Promise<void> = Promise.resolve();
 
   constructor(private onExternalTasksChange: (tasks: TodoItem[]) => void) {
     this.settingsPath = path.join(app.getPath('userData'), SETTINGS_FILE);
@@ -129,8 +130,19 @@ export class StorageService {
   }
 
   async saveSettings(settings: AppSettings) {
-    await mkdir(path.dirname(this.settingsPath), { recursive: true });
-    await writeFile(this.settingsPath, JSON.stringify(settingsForDisk(settings), null, 2), 'utf-8');
+    const serialized = JSON.stringify(settingsForDisk(settings), null, 2);
+    const write = this.settingsWriteQueue.then(async () => {
+      await mkdir(path.dirname(this.settingsPath), { recursive: true });
+      const tempPath = `${this.settingsPath}.tmp`;
+      await writeFile(tempPath, serialized, 'utf-8');
+      await rename(tempPath, this.settingsPath);
+    });
+    this.settingsWriteQueue = write.catch(() => {});
+    await write;
+  }
+
+  async flushSettings() {
+    await this.settingsWriteQueue;
   }
 
   async ensureTodoFile(todoPath: string) {

@@ -7,8 +7,12 @@ declare global {
     todoApi: {
       getState: () => Promise<AppState>;
       getCodexUsage: () => Promise<CodexUsage>;
-      addTask: (text: string) => Promise<AppState>;
+      addTask: (text: string, dueDate?: string) => Promise<AppState>;
+      updateTask: (id: string, text: string, dueDate: string) => Promise<AppState>;
+      getStartup: () => Promise<boolean>;
+      setStartup: (enabled: boolean) => Promise<boolean>;
       toggleTask: (taskId: string, completed: boolean) => Promise<AppState>;
+      setPinned: (taskId: string, pinned: boolean) => Promise<AppState>;
       deleteTask: (taskId: string) => Promise<AppState>;
       updateTaskText: (taskId: string, text: string) => Promise<AppState>;
       reorderOpenTasks: (orderedOpenIds: string[]) => Promise<AppState>;
@@ -20,10 +24,13 @@ declare global {
       runSync: () => Promise<{ ok: boolean; message: string }>;
       minimizeWindow: () => Promise<void>;
       closeWindow: () => Promise<void>;
+      hideCard: () => Promise<void>;
+      showCard: (card: 'main' | 'short') => Promise<void>;
       onStateUpdated: (handler: (state: AppState) => void) => () => void;
       onSavedToast: (handler: (payload: SaveToastPayload) => void) => () => void;
       onOpenSettingsPanel: (handler: () => void) => () => void;
     };
+    shortTodoApi: Window['todoApi'];
   }
 }
 

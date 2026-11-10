@@ -1,13 +1,13 @@
 {
-  "name": "apex-todo",
+  "name": "little-todo-card",
   "version": "1.2.2",
-  "description": "ApexTodo local markdown todo desktop widget",
+  "description": "Windows desktop todo cards with deadlines and short-term tasks",
   "main": "dist-electron/main.js",
   "author": "BigWatermelon",
-  "license": "MIT",
+  "license": "GPL-3.0",
   "repository": {
     "type": "git",
-    "url": "https://github.com/XGxin/ApexTodo.git"
+    "url": "https://github.com/zongziyi/little-todo-card.git"
   },
   "scripts": {
     "dev": "concurrently -k \"npm:dev:renderer\" \"npm:dev:main\" \"npm:dev:electron\"",
@@ -17,10 +17,10 @@
     "build": "npm run build:renderer && npm run build:main",
     "build:renderer": "node ./node_modules/vite/dist/node/cli.js build",
     "build:main": "tsup --config tsup.config.ts",
-    "test": "npm run build:main && node --test tests/markdown.test.cjs tests/sync.test.cjs tests/i18n.test.cjs tests/codexUsage.test.cjs",
+    "test": "npm run build:main && node --test tests/markdown.test.cjs tests/sync.test.cjs tests/i18n.test.cjs tests/codexUsage.test.cjs tests/deadline.test.cjs tests/taskOrder.test.cjs",
     "test:system": "node scripts/system-smoke.mjs",
     "preview": "node ./node_modules/vite/dist/node/cli.js preview",
-    "dist": "npm run build && electron-builder --win appx --x64",
+    "dist": "npm run build && electron-builder --win --dir --x64",
     "icons": "node scripts/generate-icons.mjs"
   },
   "dependencies": {
@@ -53,8 +53,8 @@
     "wait-on": "^9.0.4"
   },
   "build": {
-    "appId": "com.apextodo.app",
-    "productName": "ApexTodo",
+    "appId": "com.personal.littletodocard",
+    "productName": "LittleTodo",
     "asar": true,
     "compression": "maximum",
     "electronLanguages": [
@@ -70,33 +70,16 @@
       "package.json"
     ],
     "win": {
-      "icon": "build/icon.ico",
       "target": [
         {
-          "target": "appx",
+          "target": "dir",
           "arch": [
             "x64"
           ]
         }
-      ]
-    },
-    "appx": {
-      "identityName": "BigWatermelon.ApexTodo",
-      "publisher": "CN=3E0A3275-0795-4C6C-B5B3-A350C4BC8567",
-      "publisherDisplayName": "BigWatermelon",
-      "applicationId": "ApexTodo",
-      "displayName": "ApexTodo",
-      "backgroundColor": "#0ccf6c",
-      "languages": [
-        "zh-CN",
-        "en-US"
       ],
-      "capabilities": [
-        "internetClient",
-        "privateNetworkClientServer",
-        "runFullTrust"
-      ],
-      "artifactName": "${productName}.${version}.${arch}.${ext}"
+      "signAndEditExecutable": false
     }
-  }
+  },
+  "productName": "LittleTodo"
 }

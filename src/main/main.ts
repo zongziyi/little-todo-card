@@ -17,16 +17,23 @@ import { getCodexUsage } from './codexUsage';
 import { StorageService } from './storage';
 import { WebDavSyncService } from './sync';
 
+// Keep this personal build's data independent of an existing ApexTodo installation.
+app.setName('LittleTodoCard');
+if (process.env.LITTLE_TODO_DATA_DIR) app.setPath('userData', process.env.LITTLE_TODO_DATA_DIR);
+
 const execFileAsync = promisify(execFile);
 const DEFAULT_SHORTCUT = 'CommandOrControl+Shift+A';
 const DESKTOP_INTERACT_SHORTCUT = 'CommandOrControl+Shift+Z';
 
 let mainWindow: BrowserWindow | null = null;
+let shortWindow: BrowserWindow | null = null;
 let settings: AppSettings;
 let tasks: TodoItem[] = [];
+let shortTasks: TodoItem[] = [];
 let lastSyncTime: string | undefined;
 let statusMessage: LocalizedMessage | undefined;
 let saveWindowBoundsTimer: NodeJS.Timeout | null = null;
+let saveShortBoundsTimer: NodeJS.Timeout | null = null;
 let tray: Tray | null = null;
 let showWindowAfterBootstrap = false;
 
@@ -34,6 +41,12 @@ const storage = new StorageService((nextTasks) => {
   tasks = normalizeTaskOrder(nextTasks);
   broadcastState();
 });
+const shortStorage = new StorageService((nextTasks) => {
+  shortTasks = nextTasks;
+  broadcastShortState();
+});
+let shortWriteQueue: Promise<void> = Promise.resolve();
+function shortTodoPath() { return path.join(app.getPath('userData'), 'short-todo.md'); }
 
 const syncService = new WebDavSyncService(
   () => settings,
@@ -132,6 +145,28 @@ function currentState(): AppState {
   };
 }
 
+function currentShortState(): AppState {
+  return { ...currentState(), tasks: shortTasks };
+}
+
+function broadcastShortState() {
+  if (shortWindow && !shortWindow.isDestroyed()) {
+    shortWindow.webContents.send('short:state-updated', currentShortState());
+  }
+}
+
+function updateShortTasks(transform: (current: TodoItem[]) => TodoItem[]): Promise<AppState> {
+  const action = shortWriteQueue.then(async () => {
+    const next = transform(shortTasks);
+    await shortStorage.writeTasks(shortTodoPath(), next);
+    shortTasks = next;
+    broadcastShortState();
+    return currentShortState();
+  });
+  shortWriteQueue = action.then(() => {}, () => {});
+  return action;
+}
+
 function broadcastState() {
   updateTrayMenu();
   if (!mainWindow || mainWindow.isDestroyed()) {
@@ -183,6 +218,28 @@ function showMainWindow() {
   mainWindow.focus();
 }
 
+async function setCardVisible(card: 'main' | 'short', visible: boolean) {
+  const win = card === 'main' ? mainWindow : shortWindow;
+  if (!win || win.isDestroyed()) return;
+  const key = card === 'main' ? 'mainVisible' : 'shortVisible';
+  const previous = settings[key];
+  settings[key] = visible;
+  try {
+    await storage.saveSettings(settings);
+  } catch (error) {
+    settings[key] = previous;
+    throw error;
+  }
+  if (visible) {
+    if (win.isMinimized()) win.restore();
+    win.show();
+    win.focus();
+  } else {
+    win.hide();
+  }
+  updateTrayMenu();
+}
+
 async function setDesktopMouseThrough(nextValue: boolean, openSettingsAfterShow = false) {
   settings.desktopMouseThrough = nextValue;
   await storage.saveSettings(settings);
@@ -218,7 +275,7 @@ function applyWindowMode() {
     mainWindow.setSkipTaskbar(true);
     mainWindow.setMinimizable(false);
     mainWindow.setMaximizable(false);
-    mainWindow.setResizable(false);
+    mainWindow.setResizable(true);
     mainWindow.setMovable(!settings.desktopLockPosition);
     mainWindow.setIgnoreMouseEvents(settings.desktopMouseThrough, { forward: true });
     return;
@@ -349,9 +406,18 @@ function updateTrayMenu() {
 
   const trayMenu = Menu.buildFromTemplate([
     {
+      label: settings.mainVisible === false ? '显示倒数日清单' : '隐藏倒数日清单',
+      click: () => { void setCardVisible('main', settings.mainVisible === false); }
+    },
+    {
+      label: settings.shortVisible === false ? '显示短期待办' : '隐藏短期待办',
+      click: () => { void setCardVisible('short', settings.shortVisible === false); }
+    },
+    { type: 'separator' },
+    {
       label: t('tray.showWindow'),
       click: () => {
-        void setDesktopMouseThrough(false);
+        void setCardVisible('main', true);
       }
     },
     {
@@ -381,7 +447,7 @@ function updateTrayMenu() {
     }
   ]);
 
-  tray.setToolTip('ApexTodo');
+  tray.setToolTip('小小待办');
   tray.setContextMenu(trayMenu);
 }
 
@@ -394,7 +460,7 @@ function ensureTray() {
 
   tray = new Tray(createTrayIcon());
   tray.on('click', () => {
-    void setDesktopMouseThrough(false);
+    void setCardVisible('main', true);
   });
   updateTrayMenu();
 }
@@ -451,14 +517,14 @@ function shouldStartHidden() {
 }
 
 function getSafeWindowBounds() {
-  const targetWidth = 440;
-  const targetHeight = 760;
+  const targetWidth = 300;
+  const targetHeight = 260;
   const workArea = screen.getPrimaryDisplay().workArea;
 
-  const width = Math.min(targetWidth, Math.max(360, workArea.width));
-  const height = Math.min(targetHeight, Math.max(560, workArea.height));
-  const x = workArea.x + Math.max(0, Math.floor((workArea.width - width) / 2));
-  const y = workArea.y + Math.max(0, Math.floor((workArea.height - height) / 2));
+  const width = Math.min(targetWidth, workArea.width);
+  const height = Math.min(targetHeight, workArea.height);
+  const x = workArea.x + Math.max(0, workArea.width - width - 24);
+  const y = workArea.y + 40;
 
   return { x, y, width, height };
 }
@@ -481,8 +547,8 @@ function normalizeWindowBounds(bounds?: WindowBoundsState) {
   const probe = {
     x: Math.round(rawX),
     y: Math.round(rawY),
-    width: Math.max(360, Math.round(rawWidth)),
-    height: Math.max(560, Math.round(rawHeight))
+    width: Math.max(280, Math.round(rawWidth)),
+    height: Math.max(220, Math.round(rawHeight))
   };
 
   const display = screen.getDisplayMatching(probe);
@@ -542,8 +608,8 @@ function createWindow(startHidden: boolean) {
     y: bounds.y,
     width: bounds.width,
     height: bounds.height,
-    minWidth: 360,
-    minHeight: 560,
+    minWidth: 280,
+    minHeight: 220,
     frame: false,
     transparent: enableTransparentWindow,
     backgroundColor: enableTransparentWindow ? '#00000000' : '#0f172a',
@@ -551,7 +617,7 @@ function createWindow(startHidden: boolean) {
     hasShadow: !enableTransparentWindow,
     skipTaskbar: true,
     show: !startHidden,
-    title: 'ApexTodo',
+    title: '小小待办',
     icon: app.isPackaged ? undefined : path.join(__dirname, '..', 'build', 'icon.png'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -586,26 +652,26 @@ function createWindow(startHidden: boolean) {
   });
 
   mainWindow.once('ready-to-show', () => {
-    if (!startHidden) {
+    if (!startHidden && settings.mainVisible !== false) {
       showMainWindow();
     }
   });
 
   mainWindow.webContents.on('did-fail-load', () => {
-    if (!startHidden) {
+    if (!startHidden && settings.mainVisible !== false) {
       showMainWindow();
     }
   });
 
   mainWindow.webContents.on('did-finish-load', () => {
-    if (!startHidden) {
+    if (!startHidden && settings.mainVisible !== false) {
       showMainWindow();
     }
   });
 
   if (!startHidden) {
     setTimeout(() => {
-      showMainWindow();
+      if (settings.mainVisible !== false) showMainWindow();
     }, 1200);
   }
 
@@ -619,8 +685,110 @@ function createWindow(startHidden: boolean) {
   applyWindowMode();
 }
 
+function getShortLaunchBounds(): WindowBoundsState {
+  const saved = normalizeWindowBounds(settings.shortWindowBounds);
+  if (saved) return saved;
+  const main = mainWindow?.getBounds() ?? getLaunchWindowBounds();
+  const work = screen.getDisplayMatching(main).workArea;
+  const width = Math.min(main.width, work.width);
+  const height = Math.min(main.height, work.height);
+  const gap = 24;
+  const right = main.x + main.width + gap;
+  const left = main.x - width - gap;
+  const x = right + width <= work.x + work.width ? right : left >= work.x ? left : work.x;
+  return normalizeWindowBounds({ x, y: main.y, width, height }) ?? getSafeWindowBounds();
+}
+
+function persistShortWindowBoundsNow() {
+  if (!shortWindow || shortWindow.isDestroyed() || shortWindow.isMinimized() || shortWindow.isMaximized()) return;
+  const bounds = normalizeWindowBounds(shortWindow.getBounds());
+  if (!bounds) return;
+  settings.shortWindowBounds = bounds;
+  void storage.saveSettings(settings);
+}
+
+function scheduleSaveShortBounds() {
+  if (saveShortBoundsTimer) clearTimeout(saveShortBoundsTimer);
+  saveShortBoundsTimer = setTimeout(() => {
+    persistShortWindowBoundsNow();
+    saveShortBoundsTimer = null;
+  }, 180);
+}
+
+function createShortWindow(startHidden: boolean) {
+  const bounds = getShortLaunchBounds();
+  const win = new BrowserWindow({
+    ...bounds,
+    minWidth: 280,
+    minHeight: 220,
+    frame: false,
+    transparent: true,
+    backgroundColor: '#00000000',
+    autoHideMenuBar: true,
+    hasShadow: false,
+    skipTaskbar: true,
+    show: false,
+    title: '短期待办',
+    icon: app.isPackaged ? undefined : path.join(__dirname, '..', 'build', 'icon.png'),
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: false
+    }
+  });
+  shortWindow = win;
+  win.setBounds(bounds, false);
+  win.setAlwaysOnTop(false);
+  win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true, skipTransformProcessType: true });
+  win.setResizable(true);
+  win.setMovable(true);
+  win.on('move', scheduleSaveShortBounds);
+  win.on('resize', scheduleSaveShortBounds);
+  win.on('close', persistShortWindowBoundsNow);
+  win.on('minimize', () => {
+    if (settings.desktopPinned && settings.shortVisible !== false) {
+      setTimeout(() => { if (!win.isDestroyed()) win.restore(); }, 60);
+    }
+  });
+  win.once('ready-to-show', () => { if (!startHidden && settings.shortVisible !== false) win.show(); });
+  const devServerUrl = process.env.VITE_DEV_SERVER_URL;
+  if (devServerUrl) {
+    const url = new URL(devServerUrl);
+    url.searchParams.set('list', 'short');
+    void win.loadURL(url.toString());
+  } else {
+    void win.loadFile(path.join(__dirname, '..', 'dist', 'index.html'), { query: { list: 'short' } });
+  }
+}
+
 function setupIpcHandlers() {
   ipcMain.handle('app:get-state', async () => currentState());
+  ipcMain.handle('short:get-state', async () => currentShortState());
+  ipcMain.handle('card:hide', async (event) => {
+    const card = shortWindow && event.sender.id === shortWindow.webContents.id ? 'short' : 'main';
+    await setCardVisible(card, false);
+  });
+  ipcMain.handle('card:show', async (_event, card: 'main' | 'short') => {
+    if (card !== 'main' && card !== 'short') throw new Error('Unknown card');
+    await setCardVisible(card, true);
+  });
+  ipcMain.handle('short:add', async (_event, text: string) => {
+    if (!text?.trim()) return currentShortState();
+    const task = createTaskFromText(text);
+    return updateShortTasks((current) => [task, ...current]);
+  });
+  ipcMain.handle('short:update', async (_event, id: string, text: string) => {
+    const nextText = (text || '').replace(/\s+/g, ' ').trim();
+    if (!nextText) return currentShortState();
+    return updateShortTasks((current) => current.map((task) => task.id === id ? { ...task, text: nextText } : task));
+  });
+  ipcMain.handle('short:toggle', async (_event, id: string, completed: boolean) =>
+    updateShortTasks((current) => current.map((task) => task.id === id ? { ...task, completed: !!completed } : task)));
+  ipcMain.handle('short:set-pinned', async (_event, id: string, pinned: boolean) =>
+    updateShortTasks((current) => current.map((task) => task.id === id ? { ...task, pinned: !!pinned } : task)));
+  ipcMain.handle('short:delete', async (_event, id: string) =>
+    updateShortTasks((current) => current.filter((task) => task.id !== id)));
   ipcMain.handle('codex:get-usage', async () => getCodexUsage(getResolvedLocale()));
   ipcMain.handle('window:minimize', () => {
     mainWindow?.minimize();
@@ -656,14 +824,21 @@ function setupIpcHandlers() {
     return settings;
   });
 
-  ipcMain.handle('task:add', async (_event, text: string) => {
+  ipcMain.handle('task:add', async (_event, text: string, dueDate?: string) => {
     if (!text || !text.trim()) {
       return currentState();
     }
 
     const task = createTaskFromText(text);
+    if (dueDate && /^\d{4}-\d{2}-\d{2}$/.test(dueDate)) task.dueDate = dueDate;
+    const previousTasks = tasks;
     tasks = [task, ...tasks];
-    await persistTasksAndBroadcast('task.added', true);
+    try {
+      await persistTasksAndBroadcast();
+    } catch (error) {
+      tasks = previousTasks;
+      throw error;
+    }
     return currentState();
   });
 
@@ -680,6 +855,20 @@ function setupIpcHandlers() {
     tasks = [...openTasks, target, ...completedTasks];
 
     await persistTasksAndBroadcast();
+    return currentState();
+  });
+
+  ipcMain.handle('task:set-pinned', async (_event, taskId: string, pinned: boolean) => {
+    const target = tasks.find((task) => task.id === taskId);
+    if (!target) return currentState();
+    const previous = target.pinned;
+    target.pinned = !!pinned;
+    try {
+      await persistTasksAndBroadcast();
+    } catch (error) {
+      target.pinned = previous;
+      throw error;
+    }
     return currentState();
   });
 
@@ -726,6 +915,31 @@ function setupIpcHandlers() {
     target.text = nextText;
     await persistTasksAndBroadcast();
     return currentState();
+  });
+
+  ipcMain.handle('task:update', async (_event, taskId: string, text: string, dueDate: string) => {
+    const target = tasks.find((task) => task.id === taskId);
+    const nextText = (text || '').replace(/\s+/g, ' ').trim();
+    if (!target || !nextText) return currentState();
+    const previousText = target.text;
+    const previousDueDate = target.dueDate;
+    target.text = nextText;
+    target.dueDate = /^\d{4}-\d{2}-\d{2}$/.test(dueDate || '') ? dueDate : undefined;
+    try {
+      await persistTasksAndBroadcast();
+    } catch (error) {
+      target.text = previousText;
+      target.dueDate = previousDueDate;
+      throw error;
+    }
+    return currentState();
+  });
+
+  ipcMain.handle('startup:get', () => app.getLoginItemSettings().openAtLogin);
+  ipcMain.handle('startup:set', (_event, enabled: boolean) => {
+    if (!app.isPackaged) throw new Error('开机自启只在打包版本中可用');
+    app.setLoginItemSettings({ openAtLogin: !!enabled, path: process.execPath });
+    return app.getLoginItemSettings().openAtLogin;
   });
 
   ipcMain.handle('task:capture', async () => captureSelectedTextToTask());
@@ -830,6 +1044,9 @@ async function bootstrap() {
   settings.showCodexUsage = typeof settings.showCodexUsage === 'boolean' ? settings.showCodexUsage : false;
   settings.language = normalizeLocalePreference(settings.language);
   settings.windowBounds = normalizeWindowBounds(settings.windowBounds) ?? undefined;
+  settings.shortWindowBounds = normalizeWindowBounds(settings.shortWindowBounds) ?? undefined;
+  settings.mainVisible = settings.mainVisible !== false;
+  settings.shortVisible = settings.shortVisible !== false;
   if (settings.desktopPinned) {
     settings.alwaysOnTop = false;
   } else {
@@ -838,28 +1055,21 @@ async function bootstrap() {
   await storage.saveSettings(settings);
   tasks = normalizeTaskOrder(await storage.readTasks(settings.todoFilePath));
   storage.watchTodoFile(settings.todoFilePath);
+  shortTasks = await shortStorage.readTasks(shortTodoPath());
+  shortStorage.watchTodoFile(shortTodoPath());
 
   setupIpcHandlers();
 
   const startHidden = shouldStartHidden();
-  createWindow(startHidden);
+  createWindow(startHidden || settings.mainVisible === false);
+  createShortWindow(startHidden || settings.shortVisible === false);
   if (showWindowAfterBootstrap) {
     showWindowAfterBootstrap = false;
-    showMainWindow();
+    void setCardVisible('main', true);
   }
   ensureTray();
-  registerGlobalHotkey();
-  syncService.start();
-
-  if (settings.webdav.enabled) {
-    void syncService.sync(settings.todoFilePath).catch((error) => {
-      statusMessage = {
-        key: 'sync.startupFailed',
-        params: { message: localizedErrorMessage(getResolvedLocale(), error) }
-      };
-      broadcastState();
-    });
-  }
+  // This personal build intentionally keeps data local and does not register
+  // ApexTodo's capture shortcut or start its WebDAV synchronization service.
 }
 
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
@@ -871,7 +1081,7 @@ if (!gotSingleInstanceLock) {
       showWindowAfterBootstrap = true;
       return;
     }
-    showMainWindow();
+    void setCardVisible('main', true);
   });
 
   void app.whenReady().then(async () => {
@@ -889,23 +1099,34 @@ if (!gotSingleInstanceLock) {
       if (BrowserWindow.getAllWindows().length === 0) {
         createWindow(false);
       } else {
-        showMainWindow();
+        void setCardVisible('main', true);
       }
     });
   });
 }
 
-app.on('will-quit', () => {
+let finishingQuit = false;
+app.on('will-quit', (event) => {
+  if (finishingQuit) return;
+  finishingQuit = true;
+  event.preventDefault();
   if (saveWindowBoundsTimer) {
     clearTimeout(saveWindowBoundsTimer);
     saveWindowBoundsTimer = null;
   }
   persistWindowBoundsNow();
+  if (saveShortBoundsTimer) {
+    clearTimeout(saveShortBoundsTimer);
+    saveShortBoundsTimer = null;
+  }
+  persistShortWindowBoundsNow();
   globalShortcut.unregisterAll();
   storage.unwatchTodoFile();
+  shortStorage.unwatchTodoFile();
   syncService.stop();
   tray?.destroy();
   tray = null;
+  void shortWriteQueue.then(() => storage.flushSettings()).finally(() => app.exit(0));
 });
 
 app.on('window-all-closed', () => {

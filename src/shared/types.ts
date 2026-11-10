@@ -5,6 +5,8 @@ export interface TodoItem {
   text: string;
   completed: boolean;
   createdAt: string;
+  dueDate?: string;
+  pinned?: boolean;
 }
 
 export interface WebDavConfig {
@@ -37,6 +39,9 @@ export interface AppSettings {
   theme: ThemeMode;
   language: LocalePreference;
   windowBounds?: WindowBoundsState;
+  shortWindowBounds?: WindowBoundsState;
+  mainVisible?: boolean;
+  shortVisible?: boolean;
   webdav: WebDavConfig;
 }
 
